@@ -108,21 +108,27 @@ func (c *Client) request(ctx context.Context, method string, path string, body i
 
 	if _, ok := c.publicEndpoints[fmt.Sprintf("%s %s", method, path)]; !ok {
 		c.sessionLock.RLock()
-		SID := c.auth.sid
+		sid := c.auth.sid
 		c.sessionLock.RUnlock()
 
-		if SID == "" {
-			c.sessionLock.Lock()
-			defer c.sessionLock.Unlock()
+		if sid == "" {
+			session, err := c.SessionAPI.Login(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to login: %w", err)
+			}
 
-			// recheck client directly to make sure
-			if c.auth.sid == "" {
-				if _, err := c.SessionAPI.Login(ctx); err != nil {
-					return nil, fmt.Errorf("failed to login: %w", err)
-				}
+			sid = session.SID
+
+			if sid == "" {
+				c.sessionLock.RLock()
+				sid = c.auth.sid
+				c.sessionLock.RUnlock()
 			}
 		}
-		req.Header[authHeader] = []string{c.auth.sid}
+
+		if sid != "" {
+			req.Header.Set(authHeader, sid)
+		}
 	}
 
 	for key, header := range c.headers {
