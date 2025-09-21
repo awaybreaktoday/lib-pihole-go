@@ -1,4 +1,4 @@
-module github.com/ryanwholey/go-pihole
+module github.com/awaybreaktoday/lib-pihole-go
 
 go 1.22
 
