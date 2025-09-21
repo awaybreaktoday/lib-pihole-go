@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"net/http"
 	"os"
 	"testing"
 
@@ -24,6 +25,45 @@ func TestClientValidation(t *testing.T) {
 
 		assert.NoError(t, err)
 	})
+}
+
+func TestClientUsesAPIKey(t *testing.T) {
+	isUnit(t)
+	t.Parallel()
+
+	const apiKey = "test-token"
+
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case req.Method == http.MethodPost && req.URL.Path == "/api/auth":
+				t.Fatalf("unexpected authentication request when API key is configured")
+			case req.Method == http.MethodGet && req.URL.Path == "/api/config":
+				if got := req.Header.Get("X-FTL-APIKEY"); got != apiKey {
+					t.Fatalf("expected API key header %q, got %q", apiKey, got)
+				}
+				if got := req.Header.Get(authHeader); got != "" {
+					t.Fatalf("expected no session header when using API key, got %q", got)
+				}
+				return newHTTPResponse(http.StatusOK, `{}`), nil
+			default:
+				return newHTTPResponse(http.StatusNotFound, ``), nil
+			}
+			return nil, fmt.Errorf("unhandled request %s %s", req.Method, req.URL.Path)
+		}),
+	}
+
+	client, err := New(Config{
+		BaseURL:    "http://pi.test",
+		APIToken:   apiKey,
+		HttpClient: httpClient,
+	})
+	require.NoError(t, err)
+
+	res, err := client.Get(context.Background(), "/api/config")
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	res.Body.Close()
 }
 
 func isAcceptance(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -17,6 +18,9 @@ type LocalCNAME interface {
 
 	// Create a CNAME record.
 	Create(ctx context.Context, domain string, target string) (*CNAMERecord, error)
+
+	// CreateRecord creates a CNAME record using the provided record definition.
+	CreateRecord(ctx context.Context, record *CNAMERecord) (*CNAMERecord, error)
 
 	// Get a CNAME record by its domain.
 	Get(ctx context.Context, domain string) (*CNAMERecord, error)
@@ -37,6 +41,8 @@ type CNAMERecord struct {
 	Domain string
 	Target string
 	TTL    int
+	HasTTL bool
+	raw    string
 }
 
 type cnameRecordResponse struct{}
@@ -56,32 +62,43 @@ type cnameRecordDNSListResponse struct {
 func (res cnameRecordListResponse) toCNAMERecordList() (CNAMERecordList, error) {
 	list := make(CNAMERecordList, 0, len(res.Config.DNS.CNAMERecords))
 
-	for _, record := range res.Config.DNS.CNAMERecords {
-		entry := strings.Split(record, ",")
-		if len(entry) < 2 || len(entry) > 3 {
-			return nil, fmt.Errorf("invalid CNAME record: %q", record)
+	for _, entry := range res.Config.DNS.CNAMERecords {
+		record, err := parseCNAMERecord(entry)
+		if err != nil {
+			return nil, err
 		}
 
-		r := CNAMERecord{
-			Domain: strings.TrimSpace(entry[0]),
-			Target: strings.TrimSpace(entry[1]),
-		}
-
-		if len(entry) == 3 {
-			ttlStr := strings.TrimSpace(entry[2])
-			if ttlStr != "" {
-				ttl, err := strconv.Atoi(ttlStr)
-				if err != nil {
-					return nil, fmt.Errorf("invalid TTL in CNAME record %q: %w", record, err)
-				}
-				r.TTL = ttl
-			}
-		}
-
-		list = append(list, r)
+		list = append(list, record)
 	}
 
 	return list, nil
+}
+
+func parseCNAMERecord(raw string) (CNAMERecord, error) {
+	entry := strings.Split(raw, ",")
+	if len(entry) < 2 || len(entry) > 3 {
+		return CNAMERecord{}, fmt.Errorf("invalid CNAME record: %q", raw)
+	}
+
+	record := CNAMERecord{
+		Domain: strings.TrimSpace(entry[0]),
+		Target: strings.TrimSpace(entry[1]),
+		raw:    strings.TrimSpace(raw),
+	}
+
+	if len(entry) == 3 {
+		ttlStr := strings.TrimSpace(entry[2])
+		if ttlStr != "" {
+			ttl, err := strconv.Atoi(ttlStr)
+			if err != nil {
+				return CNAMERecord{}, fmt.Errorf("invalid TTL in CNAME record %q: %w", raw, err)
+			}
+			record.TTL = ttl
+			record.HasTTL = true
+		}
+	}
+
+	return record, nil
 }
 
 type CNAMERecordList []CNAMERecord
@@ -110,9 +127,12 @@ func (cname localCNAME) List(ctx context.Context) (CNAMERecordList, error) {
 
 // Create creates a CNAME record
 func (cname localCNAME) Create(ctx context.Context, domain string, target string) (*CNAMERecord, error) {
-	// TODO: Support TTL
-	// bar.com%2Cbaz.com%2C200
-	value := fmt.Sprintf("%s%%2C%s", domain, target)
+	return cname.CreateRecord(ctx, &CNAMERecord{Domain: domain, Target: target})
+}
+
+// CreateRecord creates a CNAME record using the provided record definition.
+func (cname localCNAME) CreateRecord(ctx context.Context, record *CNAMERecord) (*CNAMERecord, error) {
+	value := encodeCNAMERecord(record)
 	res, err := cname.client.Put(ctx, fmt.Sprintf("/api/config/dns/cnameRecords/%s", value), nil)
 	if err != nil {
 		return nil, err
@@ -122,15 +142,10 @@ func (cname localCNAME) Create(ctx context.Context, domain string, target string
 
 	if res.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(res.Body)
-		return nil, fmt.Errorf("received unexpected status code %d %s", res.StatusCode, string(b))
+		return nil, newCNAMEAPIError(res.StatusCode, b)
 	}
 
-	var dnsRes *cnameRecordResponse
-	if err := json.NewDecoder(res.Body).Decode(&dnsRes); err != nil {
-		return nil, fmt.Errorf("failed to parse custom CNAME response body: %w", err)
-	}
-
-	return cname.Get(ctx, domain)
+	return cname.Get(ctx, record.Domain)
 }
 
 // Get returns a CNAME record by the passed domain
@@ -159,10 +174,7 @@ func (cname localCNAME) Delete(ctx context.Context, domain string) error {
 		return fmt.Errorf("failed looking up CNAME record %s for deletion: %w", domain, err)
 	}
 
-	value := fmt.Sprintf("%s%%2C%s", record.Domain, record.Target)
-	if record.TTL != 0 {
-		value = fmt.Sprintf("%s%%2C%d", value, record.TTL)
-	}
+	value := encodeCNAMERecord(record)
 
 	res, err := cname.client.Delete(ctx, fmt.Sprintf("/api/config/dns/cnameRecords/%s", value))
 	if err != nil {
@@ -173,8 +185,31 @@ func (cname localCNAME) Delete(ctx context.Context, domain string) error {
 
 	if res.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(res.Body)
-		return fmt.Errorf("received unexpected status code: %d %s", res.StatusCode, string(b))
+		return newCNAMEAPIError(res.StatusCode, b)
 	}
 
 	return nil
+}
+
+func encodeCNAMERecord(record *CNAMERecord) string {
+	if record == nil {
+		return ""
+	}
+
+	if record.raw != "" && record.Domain != "" {
+		return escapeCNAMEValue(record.raw)
+	}
+
+	parts := []string{strings.TrimSpace(record.Domain), strings.TrimSpace(record.Target)}
+	if record.HasTTL {
+		parts = append(parts, strconv.Itoa(record.TTL))
+	}
+
+	raw := strings.Join(parts, ",")
+	return escapeCNAMEValue(raw)
+}
+
+func escapeCNAMEValue(value string) string {
+	escaped := url.PathEscape(value)
+	return strings.ReplaceAll(escaped, ",", "%2C")
 }
