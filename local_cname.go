@@ -45,8 +45,6 @@ type CNAMERecord struct {
 	raw    string
 }
 
-type cnameRecordResponse struct{}
-
 type cnameRecordListResponse struct {
 	Config cnameRecordConfigListResponse `json:"config"`
 }
