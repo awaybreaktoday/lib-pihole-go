@@ -7,7 +7,7 @@ Requires Pi-hole Web Interface >= `6`. For <6, use tag <= v0.0.4
 ## Usage
 
 ```go
-import "github.com/ryanwholey/go-pihole"
+import "github.com/awaybreaktoday/go-pihole"
 
 client := pihole.New(pihole.Config{
 	BaseURL:  "http://pi.hole"

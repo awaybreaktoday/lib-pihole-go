@@ -53,16 +53,19 @@ type dnsRecordDNSListResponse struct {
 
 type dnsRecordResponse struct{}
 
-func (res dnsRecordListResponse) toDNSRecordList() DNSRecordList {
-	list := make(DNSRecordList, len(res.Config.DNS.Hosts))
+func (res dnsRecordListResponse) toDNSRecordList() (DNSRecordList, error) {
+	list := make(DNSRecordList, 0, len(res.Config.DNS.Hosts))
 
-	for i, record := range res.Config.DNS.Hosts {
-		entry := strings.Split(record, " ")
+	for _, record := range res.Config.DNS.Hosts {
+		entry := strings.Fields(record)
+		if len(entry) < 2 {
+			return nil, fmt.Errorf("invalid DNS record: %q", record)
+		}
 
-		list[i] = DNSRecord{IP: entry[0], Domain: entry[1]}
+		list = append(list, DNSRecord{IP: entry[0], Domain: entry[1]})
 	}
 
-	return list
+	return list, nil
 }
 
 // List returns a list of custom DNS records
@@ -78,7 +81,12 @@ func (dns localDNS) List(ctx context.Context) (DNSRecordList, error) {
 		return nil, fmt.Errorf("failed to parse customDNS list body: %w", err)
 	}
 
-	return resList.toDNSRecordList(), nil
+	records, err := resList.toDNSRecordList()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse customDNS list body: %w", err)
+	}
+
+	return records, nil
 }
 
 // Create creates a custom DNS record

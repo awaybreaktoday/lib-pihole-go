@@ -76,7 +76,9 @@ func (s *sessionAPI) Login(ctx context.Context) (Session, error) {
 		return Session{}, err
 	}
 
+	s.client.sessionLock.Lock()
 	s.client.auth.sid = session.SID
+	s.client.sessionLock.Unlock()
 
 	return session, nil
 }
