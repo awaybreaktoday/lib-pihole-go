@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -33,8 +34,12 @@ type localDNS struct {
 }
 
 type DNSRecord struct {
-	IP     string
-	Domain string
+	IP      string
+	Domain  string
+	TTL     int
+	HasTTL  bool
+	Comment string
+	raw     string
 }
 
 type DNSRecordList []DNSRecord
@@ -51,21 +56,58 @@ type dnsRecordDNSListResponse struct {
 	Hosts []string `json:"hosts"`
 }
 
-type dnsRecordResponse struct{}
-
 func (res dnsRecordListResponse) toDNSRecordList() (DNSRecordList, error) {
 	list := make(DNSRecordList, 0, len(res.Config.DNS.Hosts))
 
-	for _, record := range res.Config.DNS.Hosts {
-		entry := strings.Fields(record)
-		if len(entry) < 2 {
-			return nil, fmt.Errorf("invalid DNS record: %q", record)
+	for _, entry := range res.Config.DNS.Hosts {
+		record, err := parseDNSRecord(entry)
+		if err != nil {
+			return nil, err
 		}
 
-		list = append(list, DNSRecord{IP: entry[0], Domain: entry[1]})
+		list = append(list, record)
 	}
 
 	return list, nil
+}
+
+func parseDNSRecord(raw string) (DNSRecord, error) {
+	record := DNSRecord{raw: raw}
+	line := strings.TrimSpace(raw)
+
+	if line == "" {
+		return record, fmt.Errorf("invalid DNS record: %q", raw)
+	}
+
+	commentIdx := strings.Index(line, "#")
+	if commentIdx >= 0 {
+		record.Comment = strings.TrimSpace(line[commentIdx+1:])
+		line = strings.TrimSpace(line[:commentIdx])
+	}
+
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return record, fmt.Errorf("invalid DNS record: %q", raw)
+	}
+
+	record.IP = parts[0]
+	record.Domain = parts[1]
+
+	if len(parts) >= 3 {
+		if ttl, err := strconv.Atoi(parts[2]); err == nil {
+			record.TTL = ttl
+			record.HasTTL = true
+			if len(parts) > 3 {
+				extra := strings.Join(parts[3:], " ")
+				record.Comment = strings.TrimSpace(strings.Join([]string{record.Comment, extra}, " "))
+			}
+		} else {
+			extra := strings.Join(parts[2:], " ")
+			record.Comment = strings.TrimSpace(strings.Join([]string{record.Comment, extra}, " "))
+		}
+	}
+
+	return record, nil
 }
 
 // List returns a list of custom DNS records
@@ -102,12 +144,7 @@ func (dns localDNS) Create(ctx context.Context, domain string, IP string) (*DNSR
 
 	if res.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(res.Body)
-		return nil, fmt.Errorf("received unexpected status code %d %s", res.StatusCode, string(b))
-	}
-
-	var dnsRes *dnsRecordResponse
-	if err := json.NewDecoder(res.Body).Decode(&dnsRes); err != nil {
-		return nil, fmt.Errorf("failed to parse customDNS response body: %w", err)
+		return nil, newDNSAPIError(res.StatusCode, b)
 	}
 
 	// if !dnsRes.Success {
@@ -155,7 +192,7 @@ func (dns localDNS) Delete(ctx context.Context, domain string) error {
 
 	if res.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(res.Body)
-		return fmt.Errorf("received unexpected status code: %d %s", res.StatusCode, string(b))
+		return newDNSAPIError(res.StatusCode, b)
 	}
 
 	return nil

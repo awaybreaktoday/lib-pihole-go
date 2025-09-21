@@ -21,6 +21,8 @@ type Config struct {
 	SessionID  string
 	HttpClient *http.Client
 	Headers    http.Header
+	APIToken   string
+	APIKey     string
 }
 
 type Client struct {
@@ -30,6 +32,7 @@ type Client struct {
 	http            *http.Client
 	auth            auth
 	publicEndpoints map[string]bool
+	apiKey          string
 
 	sessionLock sync.RWMutex
 
@@ -76,6 +79,16 @@ func New(config Config) (*Client, error) {
 		},
 	}
 
+	apiKey := config.APIToken
+	if apiKey == "" {
+		apiKey = config.APIKey
+	}
+	client.apiKey = apiKey
+
+	if apiKey != "" {
+		headers.Set("X-FTL-APIKEY", apiKey)
+	}
+
 	if config.SessionID != "" {
 		client.auth.sid = config.SessionID
 	}
@@ -111,7 +124,7 @@ func (c *Client) request(ctx context.Context, method string, path string, body i
 		sid := c.auth.sid
 		c.sessionLock.RUnlock()
 
-		if sid == "" {
+		if sid == "" && c.apiKey == "" {
 			session, err := c.SessionAPI.Login(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("failed to login: %w", err)
