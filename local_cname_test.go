@@ -71,3 +71,48 @@ func TestLocalCNAME(t *testing.T) {
 		assert.ErrorIs(t, err, ErrorLocalCNAMENotFound)
 	})
 }
+
+func TestCNAMERecordListResponse_toCNAMERecordList(t *testing.T) {
+	t.Run("parses records with optional TTL", func(t *testing.T) {
+		resp := cnameRecordListResponse{
+			Config: cnameRecordConfigListResponse{
+				DNS: cnameRecordDNSListResponse{
+					CNAMERecords: []string{"example.com , target.test , 3600"},
+				},
+			},
+		}
+
+		records, err := resp.toCNAMERecordList()
+		require.NoError(t, err)
+		require.Len(t, records, 1)
+		assert.Equal(t, "example.com", records[0].Domain)
+		assert.Equal(t, "target.test", records[0].Target)
+		assert.Equal(t, 3600, records[0].TTL)
+	})
+
+	t.Run("returns an error for malformed records", func(t *testing.T) {
+		resp := cnameRecordListResponse{
+			Config: cnameRecordConfigListResponse{
+				DNS: cnameRecordDNSListResponse{
+					CNAMERecords: []string{"example.com"},
+				},
+			},
+		}
+
+		_, err := resp.toCNAMERecordList()
+		require.Error(t, err)
+	})
+
+	t.Run("returns an error when TTL is invalid", func(t *testing.T) {
+		resp := cnameRecordListResponse{
+			Config: cnameRecordConfigListResponse{
+				DNS: cnameRecordDNSListResponse{
+					CNAMERecords: []string{"example.com,target.test,not-a-number"},
+				},
+			},
+		}
+
+		_, err := resp.toCNAMERecordList()
+		require.Error(t, err)
+	})
+}

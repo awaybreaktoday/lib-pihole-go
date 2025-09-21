@@ -71,3 +71,34 @@ func TestLocalDNS(t *testing.T) {
 		assert.ErrorIs(t, err, ErrorLocalDNSNotFound)
 	})
 }
+
+func TestDNSRecordListResponse_toDNSRecordList(t *testing.T) {
+	t.Run("parses records with extra spacing", func(t *testing.T) {
+		resp := dnsRecordListResponse{
+			Config: dnsRecordConfigListResponse{
+				DNS: dnsRecordDNSListResponse{
+					Hosts: []string{"127.0.0.1    example.com"},
+				},
+			},
+		}
+
+		records, err := resp.toDNSRecordList()
+		require.NoError(t, err)
+		require.Len(t, records, 1)
+		assert.Equal(t, "127.0.0.1", records[0].IP)
+		assert.Equal(t, "example.com", records[0].Domain)
+	})
+
+	t.Run("returns an error for invalid records", func(t *testing.T) {
+		resp := dnsRecordListResponse{
+			Config: dnsRecordConfigListResponse{
+				DNS: dnsRecordDNSListResponse{
+					Hosts: []string{"127.0.0.1"},
+				},
+			},
+		}
+
+		_, err := resp.toDNSRecordList()
+		require.Error(t, err)
+	})
+}

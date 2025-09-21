@@ -53,27 +53,35 @@ type cnameRecordDNSListResponse struct {
 	CNAMERecords []string `json:"cnameRecords"`
 }
 
-func (res cnameRecordListResponse) toCNAMERecordList() CNAMERecordList {
-	list := make(CNAMERecordList, len(res.Config.DNS.CNAMERecords))
+func (res cnameRecordListResponse) toCNAMERecordList() (CNAMERecordList, error) {
+	list := make(CNAMERecordList, 0, len(res.Config.DNS.CNAMERecords))
 
-	for i, record := range res.Config.DNS.CNAMERecords {
+	for _, record := range res.Config.DNS.CNAMERecords {
 		entry := strings.Split(record, ",")
+		if len(entry) < 2 || len(entry) > 3 {
+			return nil, fmt.Errorf("invalid CNAME record: %q", record)
+		}
 
 		r := CNAMERecord{
-			Domain: entry[0],
-			Target: entry[1],
+			Domain: strings.TrimSpace(entry[0]),
+			Target: strings.TrimSpace(entry[1]),
 		}
 
 		if len(entry) == 3 {
-			// TODO: Handle TTL parse error
-			ttl, _ := strconv.Atoi(entry[2])
-			r.TTL = ttl
+			ttlStr := strings.TrimSpace(entry[2])
+			if ttlStr != "" {
+				ttl, err := strconv.Atoi(ttlStr)
+				if err != nil {
+					return nil, fmt.Errorf("invalid TTL in CNAME record %q: %w", record, err)
+				}
+				r.TTL = ttl
+			}
 		}
 
-		list[i] = r
+		list = append(list, r)
 	}
 
-	return list
+	return list, nil
 }
 
 type CNAMERecordList []CNAMERecord
@@ -92,7 +100,12 @@ func (cname localCNAME) List(ctx context.Context) (CNAMERecordList, error) {
 		return nil, fmt.Errorf("failed to parse custom CNAME list body: %w", err)
 	}
 
-	return resList.toCNAMERecordList(), nil
+	records, err := resList.toCNAMERecordList()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse custom CNAME list body: %w", err)
+	}
+
+	return records, nil
 }
 
 // Create creates a CNAME record
